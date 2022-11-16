@@ -1,1 +1,1 @@
-# Simulation of couple oscillators in Rust!
+# Simulation of coupled oscillators in Rust!
