@@ -27,7 +27,7 @@ fn get_left_neighbor(s: u32, n: u32) -> u32 {
     s - n
 }
 
-fn step(s: & mut State) {
+fn step(s: &mut State) {
     let mut rng = rand::thread_rng();
     let n: usize = rng.gen_range(0..N as usize);
     s.states[n] = (s.states[n] + 1) % 3;
@@ -42,16 +42,16 @@ fn initialize_state() -> State {
         rates_sum: 0.0,
     };
 
-    for i in 0 .. N {
+    for i in 0..N {
         let n = i * 2 * K;
-        for j in 0 .. K {
-            state.neighbors[(n + j) as usize] = get_left_neighbor(i, j+1);
-            state.neighbors[(n + j + 1) as usize] = get_right_neighbor(i, j+1);
+        for j in 0..K {
+            state.neighbors[(n + j) as usize] = get_left_neighbor(i, j + 1);
+            state.neighbors[(n + j + 1) as usize] = get_right_neighbor(i, j + 1);
         }
         state.indexes[i as usize] = n;
     }
 
-    for i in 0 .. N as usize {
+    for i in 0..N as usize {
         state.rates[i] = 1.0;
         state.rates_sum = state.rates_sum + 1.0;
     }
@@ -61,11 +61,11 @@ fn initialize_state() -> State {
 fn main() {
     let mut state: State = initialize_state();
 
-    for i in 1 ..= ITERS {
-        step(& mut state);
+    for i in 1..=ITERS {
+        step(&mut state);
 
         print!("iter {:2}: ", i);
-        for j in 0 .. N as usize {
+        for j in 0..N as usize {
             print!("{}", state.states[j]);
         }
         println!("");
