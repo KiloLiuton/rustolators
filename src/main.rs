@@ -1,72 +1,128 @@
 use rand::Rng;
+use std::env;
+use std::process;
 
-const N: u32 = 8;
-const K: u32 = 1;
-const TWO_NK: u32 = 2 * N * K;
-const ITERS: u32 = 20;
+const SIZE: usize = 12;
+const RANGE: usize = 1;
+const TWO_NK: usize = 2 * SIZE * RANGE;
 
-struct State {
-    neighbors: [u32; TWO_NK as usize],
-    indexes: [u32; N as usize],
-    states: [u8; N as usize],
-    rates: [f32; N as usize],
-    rates_sum: f32,
+#[derive(Default, Debug)]
+pub struct Lattice {
+    neighbors: [usize; TWO_NK],
+    num_neighbors: [usize; SIZE],
+    indexes: [usize; SIZE],
 }
 
-fn get_right_neighbor(s: u32, n: u32) -> u32 {
-    if (s + n) >= N {
-        return (s + n) - N;
+impl Lattice {
+    fn get_right_neighbor(s: usize, n: usize) -> usize {
+        (s + n) % SIZE
     }
-    s + n
-}
 
-fn get_left_neighbor(s: u32, n: u32) -> u32 {
-    if s < n {
-        return (s + N) - n;
+    fn get_left_neighbor(s: usize, n: usize) -> usize {
+        ((s + SIZE) - n) % SIZE
     }
-    s - n
-}
 
-fn step(s: &mut State) {
-    let mut rng = rand::thread_rng();
-    let n: usize = rng.gen_range(0..N as usize);
-    s.states[n] = (s.states[n] + 1) % 3;
-}
-
-fn initialize_state() -> State {
-    let mut state = State {
-        neighbors: [0; TWO_NK as usize],
-        indexes: [0; N as usize],
-        states: [0; N as usize],
-        rates: [0.0; N as usize],
-        rates_sum: 0.0,
-    };
-
-    for i in 0..N {
-        let n = i * 2 * K;
-        for j in 0..K {
-            state.neighbors[(n + j) as usize] = get_left_neighbor(i, j + 1);
-            state.neighbors[(n + j + 1) as usize] = get_right_neighbor(i, j + 1);
+    fn create_regular_ring() -> Lattice {
+        let mut lattice: Lattice = Default::default();
+        for i in 0..SIZE {
+            let n = i * 2 * RANGE;
+            for j in 0..RANGE {
+                lattice.neighbors[n + j] = Lattice::get_left_neighbor(i, j + 1);
+                lattice.neighbors[n + j + 1] = Lattice::get_right_neighbor(i, j + 1);
+            }
+            lattice.indexes[i] = n;
+            lattice.num_neighbors[i] = 2 * RANGE;
         }
-        state.indexes[i as usize] = n;
+        lattice
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct System {
+    states: [u8; SIZE],
+    rates: [f32; SIZE],
+    rates_sum: f32,
+    coupling: f32,
+}
+
+impl System {
+    pub fn initialize(coupling: f32, lattice: &Lattice) -> System {
+        let mut system: System = Default::default();
+
+        system.coupling = coupling;
+
+        let mut rng = rand::thread_rng();
+        for i in 0..SIZE {
+            system.states[i] = rng.gen_range(0..=2);
+        }
+        system.calc_rates(lattice);
+        system
     }
 
-    for i in 0..N as usize {
-        state.rates[i] = 1.0;
-        state.rates_sum = state.rates_sum + 1.0;
+    pub fn step(&mut self) {
+        let mut rng = rand::thread_rng();
+        let n: usize = rng.gen_range(0..SIZE);
+        self.states[n] = (self.states[n] + 1) % 3;
     }
-    state
+
+    fn calc_rates(&mut self, lattice: &Lattice) {
+        for (i, &idx) in lattice.indexes.iter().enumerate() {
+            let cur_state = self.states[i];
+            let next_state = (cur_state + 1) % 3;
+            let prev_state = (cur_state + 2) % 3;
+
+            let mut num_prev: usize = 0;
+            let mut num_next: usize = 0;
+
+            let num_nbrs = lattice.num_neighbors[i];
+
+            for &nbr_index in &lattice.neighbors[idx..idx + num_nbrs] {
+                let nbr_state = self.states[nbr_index];
+                if nbr_state == prev_state {
+                    num_prev += 1;
+                } else if nbr_state == next_state {
+                    num_next += 1;
+                }
+            }
+            let delta: f32 = num_next as f32 - num_prev as f32;
+            let rate: f32 = f32::exp(self.coupling * delta / num_nbrs as f32);
+            self.rates[i] = rate;
+            self.rates_sum = self.rates_sum + rate;
+        }
+    }
 }
 
 fn main() {
-    let mut state: State = initialize_state();
+    let args: Vec<String> = env::args().collect();
+    let iters: u32 = if args.len() > 1 {
+        args[1].parse().unwrap_or_else(|err| {
+            println!("Trouble parsing iters due to error:\n{err}");
+            process::exit(1);
+        })
+    } else {
+        10
+    };
+    let coupling: f32 = if args.len() > 2 {
+        args[2].parse().unwrap_or_else(|err| {
+            println!("Trouble parsing coupling due to error:\n{err}");
+            process::exit(1);
+        })
+    } else {
+        2.0
+    };
 
-    for i in 1..=ITERS {
-        step(&mut state);
+    let lattice = Lattice::create_regular_ring();
+
+    let mut system = System::initialize(coupling, &lattice);
+
+    println!("System: {:#?}", system);
+
+    for i in 1..=iters {
+        system.step();
 
         print!("iter {:2}: ", i);
-        for j in 0..N as usize {
-            print!("{}", state.states[j]);
+        for j in 0..SIZE {
+            print!("{}", system.states[j]);
         }
         println!("");
     }
