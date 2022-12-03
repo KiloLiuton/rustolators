@@ -1,12 +1,15 @@
+use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::env;
+use std::fs::OpenOptions;
 use std::process;
+use std::io::prelude::*;
 
-const SIZE: usize = 12;
-const RANGE: usize = 1;
+const SIZE: usize = 100;
+const RANGE: usize = 8;
 const TWO_NK: usize = 2 * SIZE * RANGE;
+const NUM_STATES: u8 = 3;
 
-#[derive(Default, Debug)]
 pub struct Lattice {
     neighbors: [usize; TWO_NK],
     num_neighbors: [usize; SIZE],
@@ -14,21 +17,17 @@ pub struct Lattice {
 }
 
 impl Lattice {
-    fn get_right_neighbor(s: usize, n: usize) -> usize {
-        (s + n) % SIZE
-    }
-
-    fn get_left_neighbor(s: usize, n: usize) -> usize {
-        ((s + SIZE) - n) % SIZE
-    }
-
     fn create_regular_ring() -> Lattice {
-        let mut lattice: Lattice = Default::default();
+        let mut lattice: Lattice = Lattice {
+            neighbors: [0; TWO_NK],
+            num_neighbors: [0; SIZE],
+            indexes: [0; SIZE],
+        };
         for i in 0..SIZE {
             let n = i * 2 * RANGE;
             for j in 0..RANGE {
-                lattice.neighbors[n + j] = Lattice::get_left_neighbor(i, j + 1);
-                lattice.neighbors[n + j + 1] = Lattice::get_right_neighbor(i, j + 1);
+                lattice.neighbors[n + j] = ((i + SIZE) - j - 1) % SIZE;
+                lattice.neighbors[n + j + 1] = (i + j + 1) % SIZE;
             }
             lattice.indexes[i] = n;
             lattice.num_neighbors[i] = 2 * RANGE;
@@ -37,64 +36,178 @@ impl Lattice {
     }
 }
 
-#[derive(Default, Debug)]
 pub struct System {
     states: [u8; SIZE],
-    rates: [f32; SIZE],
-    rates_sum: f32,
-    coupling: f32,
+    deltas: [f64; SIZE],
+    rates: [f64; SIZE],
+    rates_sum: f64,
+    coupling: f64,
+    rng: ThreadRng,
+    lattice: Lattice,
 }
 
 impl System {
-    pub fn initialize(coupling: f32, lattice: &Lattice) -> System {
-        let mut system: System = Default::default();
+    pub fn initialize_random(coupling: f64) -> System {
+        let mut system: System = System {
+            states: [0; SIZE],
+            deltas: [0.0; SIZE],
+            rates: [0.0; SIZE],
+            rates_sum: 0.0,
+            coupling,
+            rng: rand::thread_rng(),
+            lattice: Lattice::create_regular_ring(),
+        };
+
+        for i in 0..SIZE {
+            system.states[i] = system.rng.gen_range(0..=2);
+        }
+        system.calc_rates();
+        system
+    }
+
+    pub fn initialize_uniform(coupling: f64) -> System {
+        let mut system: System = System {
+            states: [0; SIZE],
+            deltas: [0.0; SIZE],
+            rates: [0.0; SIZE],
+            rates_sum: 0.0,
+            coupling,
+            rng: rand::thread_rng(),
+            lattice: Lattice::create_regular_ring(),
+        };
 
         system.coupling = coupling;
+        system.rng = rand::thread_rng();
+        system.lattice = Lattice::create_regular_ring();
 
-        let mut rng = rand::thread_rng();
         for i in 0..SIZE {
-            system.states[i] = rng.gen_range(0..=2);
+            system.states[i] = 0;
         }
-        system.calc_rates(lattice);
+        system.calc_rates();
+        system
+    }
+
+    pub fn initialize_wave(coupling: f64, periods: usize) -> System {
+        let mut system: System = System {
+            states: [0; SIZE],
+            deltas: [0.0; SIZE],
+            rates: [0.0; SIZE],
+            rates_sum: 0.0,
+            coupling,
+            rng: rand::thread_rng(),
+            lattice: Lattice::create_regular_ring(),
+        };
+
+        system.coupling = coupling;
+        system.rng = rand::thread_rng();
+        system.lattice = Lattice::create_regular_ring();
+
+        let wave_len = SIZE / (periods * NUM_STATES as usize);
+        let mut counter: usize = 0;
+        let mut state: u8 = 0;
+        for i in 0..SIZE {
+            system.states[i] = state;
+            counter += 1;
+            if counter > wave_len {
+                state = (state + 1) % NUM_STATES;
+                counter = 0;
+            }
+        }
+        system.calc_rates();
         system
     }
 
     pub fn step(&mut self) {
-        let mut rng = rand::thread_rng();
-        let n: usize = rng.gen_range(0..SIZE);
-        self.states[n] = (self.states[n] + 1) % 3;
+        let r = self.rng.gen_range(0.0..self.rates_sum);
+        let mut partial: f64 = 0.0;
+
+        for i in 0..SIZE {
+            partial += self.rates[i];
+            if partial > r {
+                self.update_rates(i);
+                break;
+            }
+        }
     }
 
-    fn calc_rates(&mut self, lattice: &Lattice) {
-        for (i, &idx) in lattice.indexes.iter().enumerate() {
-            let cur_state = self.states[i];
-            let next_state = (cur_state + 1) % 3;
-            let prev_state = (cur_state + 2) % 3;
+    // nbr       prev   new
+    // nbr=prev: 0/0 -> 0/1 = -1 -> +1 = +2
+    // nbr=new:  0/2 -> 0/0 =  0 -> -1 = -1
+    // else:     0/1 -> 0/2 = +1 ->  0 = -1
+    // site      prev   new
+    // nbr=prev: 0/0 -> 0/1 = -1 ->  0 = +1
+    // nbr=new:  0/2 -> 0/0 = +1 -> -1 = -2
+    // else:     0/1 -> 0/2 =  0 -> +1 = +1
+    fn update_rates(&mut self, site: usize) {
+        let prev_state = self.states[site];
+        let new_state = (prev_state + 1) % NUM_STATES;
+        self.states[site] = new_state;
 
-            let mut num_prev: usize = 0;
-            let mut num_next: usize = 0;
+        let idx = self.lattice.indexes[site];
+        let num_nbrs = self.lattice.num_neighbors[site];
+        for &nbr in &self.lattice.neighbors[idx..idx + num_nbrs] {
+            let nbr_state = self.states[nbr];
+            if nbr_state == prev_state {
+                self.deltas[nbr] += 2.0;
+                self.deltas[site] += 1.0;
+            } else if nbr_state == new_state {
+                self.deltas[nbr] -= 1.0;
+                self.deltas[site] -= 2.0;
+            } else {
+                self.deltas[nbr] -= 1.0;
+                self.deltas[site] += 1.0;
+            }
+            let new_rate =
+                f64::exp(self.coupling * self.deltas[nbr] / self.lattice.num_neighbors[nbr] as f64);
+            self.rates_sum += new_rate - self.rates[nbr];
+            self.rates[nbr] = new_rate;
+        }
+        let new_rate = f64::exp(self.coupling * self.deltas[site] / num_nbrs as f64);
+        self.rates_sum += new_rate - self.rates[site];
+        self.rates[site] = new_rate;
+    }
 
-            let num_nbrs = lattice.num_neighbors[i];
+    fn calc_rates(&mut self) {
+        for i in 0..SIZE {
+            let curr_state = self.states[i];
+            let next_state = (curr_state + 1) % NUM_STATES;
+            let mut num_curr: f64 = 0.0;
+            let mut num_next: f64 = 0.0;
 
-            for &nbr_index in &lattice.neighbors[idx..idx + num_nbrs] {
+            let num_nbrs = self.lattice.num_neighbors[i];
+            let idx = self.lattice.indexes[i];
+
+            for &nbr_index in &self.lattice.neighbors[idx..idx + num_nbrs] {
                 let nbr_state = self.states[nbr_index];
-                if nbr_state == prev_state {
-                    num_prev += 1;
-                } else if nbr_state == next_state {
-                    num_next += 1;
+                if nbr_state == next_state {
+                    num_next += 1.0;
+                } else if nbr_state == curr_state {
+                    num_curr += 1.0;
                 }
             }
-            let delta: f32 = num_next as f32 - num_prev as f32;
-            let rate: f32 = f32::exp(self.coupling * delta / num_nbrs as f32);
+            let delta = num_next - num_curr;
+            let rate: f64 = f64::exp(self.coupling * delta / num_nbrs as f64);
+            self.deltas[i] = delta;
             self.rates[i] = rate;
             self.rates_sum = self.rates_sum + rate;
         }
     }
 }
 
+fn print_iter(system: &System, iter: u64) {
+    if SIZE > 100 {
+        return;
+    }
+    print!("iter {:4}: ", iter);
+    for j in 0..SIZE {
+        print!("{}", system.states[j]);
+    }
+    println!("");
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let iters: u32 = if args.len() > 1 {
+    let iters: u64 = if args.len() > 1 {
         args[1].parse().unwrap_or_else(|err| {
             println!("Trouble parsing iters due to error:\n{err}");
             process::exit(1);
@@ -102,7 +215,7 @@ fn main() {
     } else {
         10
     };
-    let coupling: f32 = if args.len() > 2 {
+    let coupling: f64 = if args.len() > 2 {
         args[2].parse().unwrap_or_else(|err| {
             println!("Trouble parsing coupling due to error:\n{err}");
             process::exit(1);
@@ -111,19 +224,23 @@ fn main() {
         2.0
     };
 
-    let lattice = Lattice::create_regular_ring();
+    // let mut system = System::initialize_random(coupling);
+    // let mut system = System::initialize_uniform(coupling);
+    let mut system = System::initialize_wave(coupling, 1);
 
-    let mut system = System::initialize(coupling, &lattice);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open("out.txt")
+        .unwrap();
 
-    println!("System: {:#?}", system);
+    if let Err(e) = writeln!(file, system.states) {
+        eprintln!("Couldn't write to file: {}", e);
+    }
 
+    print_iter(&system, 0);
     for i in 1..=iters {
         system.step();
-
-        print!("iter {:2}: ", i);
-        for j in 0..SIZE {
-            print!("{}", system.states[j]);
-        }
-        println!("");
+        print_iter(&system, i);
     }
 }
