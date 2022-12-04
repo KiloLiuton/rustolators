@@ -234,7 +234,7 @@ fn main() {
         .open("out.txt")
         .unwrap();
 
-    if let Err(e) = writeln!(file, system.states) {
+    if let Err(e) = writeln!(file, "{:?}", system.states) {
         eprintln!("Couldn't write to file: {}", e);
     }
 
