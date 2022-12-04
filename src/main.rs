@@ -61,7 +61,7 @@ impl System {
         for i in 0..SIZE {
             system.states[i] = system.rng.gen_range(0..=2);
         }
-        system.calc_rates();
+        system.init_rates();
         system
     }
 
@@ -83,7 +83,7 @@ impl System {
         for i in 0..SIZE {
             system.states[i] = 0;
         }
-        system.calc_rates();
+        system.init_rates();
         system
     }
 
@@ -113,7 +113,7 @@ impl System {
                 counter = 0;
             }
         }
-        system.calc_rates();
+        system.init_rates();
         system
     }
 
@@ -167,7 +167,8 @@ impl System {
         self.rates[site] = new_rate;
     }
 
-    fn calc_rates(&mut self) {
+    fn init_rates(&mut self) {
+        self.rates_sum = 0.0;
         for i in 0..SIZE {
             let curr_state = self.states[i];
             let next_state = (curr_state + 1) % NUM_STATES;
